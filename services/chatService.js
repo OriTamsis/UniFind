@@ -1,5 +1,5 @@
 import { collection, query, where, orderBy, addDoc, onSnapshot, getDocs, updateDoc, doc, getDoc, limit, startAfter, writeBatch, setDoc, serverTimestamp } from 'firebase/firestore';
-import { db } from '../config/firebase';
+import { db } from '../../config/firebase';
 
 export const chatService = {
     chatsCache: new Map(),
@@ -119,7 +119,6 @@ export const chatService = {
     subscribeToChatMessages(chatId, callback) {
         if (!chatId) return null;
         
-        console.log('Subscribing to chat:', chatId); // Debug log
         
         const messagesRef = collection(db, 'chats', chatId, 'messages');
         const q = query(messagesRef, orderBy('timestamp', 'desc'));
@@ -130,7 +129,7 @@ export const chatService = {
                 ...doc.data(),
                 timestamp: doc.data().timestamp?.toDate() || new Date()
             }));
-            console.log('Received messages:', messages.length); // Debug log
+
             callback(messages);
         }, error => {
             console.error('Error in message subscription:', error);
@@ -174,6 +173,8 @@ export const chatService = {
             await setDoc(chatRef, {
                 participants,
                 itemId,
+                locationShared: false,
+                status: 'active',
                 createdAt: new Date(),
                 lastMessage: messageData.text.trim(),
                 lastMessageTime: new Date(),
@@ -187,7 +188,6 @@ export const chatService = {
                 readBy: [messageData.senderId]
             });
 
-            console.log('Created new chat with ID:', chatRef.id);
             return chatRef.id;
         } catch (error) {
             console.error('Error creating chat:', error);

@@ -9,9 +9,9 @@ import {
     SafeAreaView,
     ActivityIndicator,
     RefreshControl,
-    ScrollView
+    Alert,
 } from 'react-native';
-import { collection, query, orderBy, getDocs } from 'firebase/firestore';
+import { collection, query, orderBy, getDocs, where } from 'firebase/firestore';
 import { db } from '../config/firebase';
 import { MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
 
@@ -26,7 +26,13 @@ export default function BrowseLostItems({ navigation }) {
 
     const fetchLostItems = async () => {
         try {
-            let q = query(collection(db, 'lost-items'), orderBy('createdAt', 'desc'));
+            let q = query(
+                collection(db, 'lost-items'),
+                where('status', '==', 'lost'), // Only show active items
+                orderBy('createdAt', 'desc')
+            );
+            
+            setLoading(true);
             const querySnapshot = await getDocs(q);
             const itemsList = querySnapshot.docs.map(doc => {
                 const data = doc.data();
@@ -45,6 +51,13 @@ export default function BrowseLostItems({ navigation }) {
             setItems(filteredItems);
         } catch (error) {
             console.error('Error fetching items:', error);
+            // Show a more user-friendly message while index is being built
+            if (error.code === 'failed-precondition') {
+                Alert.alert(
+                    'Setting up...',
+                    'The app is configuring the database. This may take a few minutes.'
+                );
+            }
         } finally {
             setLoading(false);
             setRefreshing(false);

@@ -246,6 +246,14 @@ function ReportItem() {
             Alert.alert('Error', 'Please select a location');
             return false;
         }
+        if (!selectedDate && !useCurrentDate) {
+            Alert.alert('Error', 'Please select a date');
+            return false;
+        }
+        if (!selectedTime && !useCurrentTime) {
+            Alert.alert('Error', 'Please select a time');
+            return false;
+        }
         return true;
     };
 

@@ -94,12 +94,15 @@ export default function WelcomeScreen({ navigation }) {
           </View>
         </View>
       )}
-      <TouchableOpacity 
-        style={styles.chatButton}
-        onPress={handleChatPress}
-      >
-        <MaterialCommunityIcons name="chat" size={24} color="#fff" />
-      </TouchableOpacity>
+      {/* Chat button for logged-in users */
+      userName && (
+        <TouchableOpacity 
+          style={styles.chatButton}
+          onPress={handleChatPress}
+        >
+          <MaterialCommunityIcons name="chat" size={24} color="#fff" />
+        </TouchableOpacity>
+      )}
     </SafeAreaView>
   );
 }

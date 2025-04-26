@@ -12,7 +12,7 @@ import {
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { doc, getDoc, addDoc, collection, query, where, getDocs } from 'firebase/firestore';
 import { db, auth } from '../config/firebase';
-import { chatService } from '../services/chatService';
+import { chatService } from '../src/services/chatService';
 
 export default function ItemDetails({ route, navigation }) {
     const { item } = route.params;

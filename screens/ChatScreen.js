@@ -16,142 +16,97 @@ import {
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { auth, db } from '../config/firebase';
 import { collection, query, orderBy, onSnapshot, getDocs, where, doc, getDoc, updateDoc } from 'firebase/firestore';
-import { chatService } from '../services/chatService';
+import { chatService } from '../src/services/chatService';
+import NotificationService from '../src/services/notificationService';
 
 export default function ChatScreen({ route, navigation }) {
-    const { 
-        chatId: initialChatId, 
-        itemId, 
-        reporterId, 
-        reporterName 
-    } = route.params || {};
+    const { chatId: initialChatId, itemId, reporterId, reporterName } = route.params || {};
 
     const [messages, setMessages] = useState([]);
     const [loading, setLoading] = useState(true);
     const [currentUser, setCurrentUser] = useState(null);
     const [newMessage, setNewMessage] = useState('');
     const [chatId, setChatId] = useState(null);
-    const [isReporter, setIsReporter] = useState(false); // Add this state
-    const [itemFound, setItemFound] = useState(false); // Add new state for item status
-    const [locationShared, setLocationShared] = useState(false); // Add state for tracking if location was shared
+    const [isReporter, setIsReporter] = useState(false);
+    const [locationSharedMap, setLocationSharedMap] = useState({});
     const flatListRef = useRef(null);
-    const messagesListenerRef = useRef(null);
 
+    // Add this function at the top of ChatScreen component
+    const getOtherUserId = (currentUserId, chatParticipants) => {
+        return chatParticipants?.find(id => id !== currentUserId);
+    };
 
-    // Add effect to check if item belongs to current user
+    // Add this function at the top of the component to get username
+    const getUserName = async (userId) => {
+        try {
+            const userDoc = await getDoc(doc(db, 'users', userId));
+            if (userDoc.exists()) {
+                return userDoc.data().username || 'Unknown';
+            }
+            return 'Unknown';
+        } catch (error) {
+            console.error('Error getting username:', error);
+            return 'Unknown';
+        }
+    };
+
+    // Check if user is reporter
     useEffect(() => {
         const checkReporter = async () => {
             if (!currentUser || !itemId) return;
-const styles = StyleSheet.create({
-    // ...existing styles...
-    header: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        padding: 16,
-        backgroundColor: '#2D2D2D',
-        borderBottomWidth: 1,
-        borderBottomColor: '#3D3D3D',
-        minHeight: 60,
-    },
-    locationShareButton: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        backgroundColor: '#2D2D2D',
-        padding: 8,
-        borderRadius: 20,
-        position: 'absolute',
-        left: 16,
-        zIndex: 1,
-    },
-    locationShareText: {
-        color: '#007AFF',
-        fontSize: 14,
-        fontWeight: '600',
-        marginLeft: 4,
-    },
-    headerName: {
-        color: '#fff',
-        fontSize: 16,
-        fontWeight: '600',
-        textAlign: 'center',
-        flex: 1,
-    },
-    headerNameWithButton: {
-        marginLeft: 120, // Adjust based on location button width
-    },
-    input: {
-        flex: 1,
-        backgroundColor: '#3D3D3D',
-        borderRadius: 20,
-        paddingHorizontal: 15,
-        paddingVertical: 10,
-        marginRight: 10,
-        color: '#fff',
-        maxHeight: 100,
-    }
-});
             try {
                 const itemDoc = await getDoc(doc(db, 'lost-items', itemId));
-                if (!itemDoc.exists()) {
-                    return;
-                }
-
-                const itemData = itemDoc.data();
-                const isItemReporter = itemData.userId === currentUser.uid;
-                
-                setIsReporter(isItemReporter);
+                if (!itemDoc.exists()) return;
+                setIsReporter(itemDoc.data().userId === currentUser.uid);
             } catch (error) {
                 console.error('Error checking reporter:', error);
             }
         };
-
         checkReporter();
     }, [currentUser, itemId]);
 
-    // Update auth effect
+    // Initialize chat
     useEffect(() => {
         let isMounted = true;
-        
+
         const initializeChat = async (user) => {
-            if (!user || !itemId || !reporterId) {
-                return;
-            }
+            if (!user || !itemId || !reporterId) return;
 
             try {
-                // Set current user first before chat initialization
-                if (isMounted) {
-                    setCurrentUser(user);
-                }
+                if (isMounted) setCurrentUser(user);
 
                 const chatQuery = query(
                     collection(db, 'chats'),
                     where('itemId', '==', itemId),
                     where('participants', 'array-contains', user.uid)
                 );
-                
+
                 const querySnapshot = await getDocs(chatQuery);
-                const existingChat = querySnapshot.docs.find(doc => 
+                const existingChat = querySnapshot.docs.find(doc =>
                     doc.data().participants.includes(reporterId)
                 );
 
-                if (existingChat && isMounted) {
-                    setChatId(existingChat.id);
-                } else if (initialChatId && isMounted) {
-                    setChatId(initialChatId);
+                const chatIdToUse = existingChat?.id || initialChatId;
+
+                if (chatIdToUse && isMounted) {
+                    setChatId(chatIdToUse);
+                    const chatDoc = await getDoc(doc(db, 'chats', chatIdToUse));
+                    if (chatDoc.exists()) {
+                        setLocationSharedMap((prev) => ({
+                            ...prev,
+                            [chatIdToUse]: chatDoc.data().locationShared || false,
+                        }));
+                    }
                 }
             } catch (error) {
                 console.error('Error initializing chat:', error);
             } finally {
-                if (isMounted) {
-                    setLoading(false);
-                }
+                if (isMounted) setLoading(false);
             }
         };
 
         const unsubscribe = auth.onAuthStateChanged(user => {
-            if (isMounted && user) {
-                initializeChat(user);
-            }
+            if (isMounted && user) initializeChat(user);
         });
 
         return () => {
@@ -160,108 +115,106 @@ const styles = StyleSheet.create({
         };
     }, [itemId, reporterId, initialChatId]);
 
-    // Message listener - Update with auth check
+    // Message listener
     useEffect(() => {
         if (!chatId || !auth.currentUser) {
             setMessages([]);
             return;
         }
 
-        try {
-            const messagesRef = collection(db, 'chats', chatId, 'messages');
-            const q = query(messagesRef, orderBy('timestamp', 'desc'));
+        const messagesRef = collection(db, 'chats', chatId, 'messages');
+        const q = query(messagesRef, orderBy('timestamp', 'desc'));
 
-            const unsubscribe = onSnapshot(q, (snapshot) => {
-                const newMessages = snapshot.docs.map(doc => ({
-                    id: doc.id,
-                    ...doc.data(),
-                    timestamp: doc.data().timestamp?.toDate() || new Date(),
-                    isCurrentUser: doc.data().senderId === auth.currentUser?.uid
-                }));
-                
-                // Check if location has been shared
-                const hasLocationMessage = newMessages.some(msg => msg.type === 'location');
-                setLocationShared(hasLocationMessage);
-                
-                setMessages(newMessages);
-                setLoading(false);
-            }, (error) => {
-                // Handle permission errors gracefully
-                if (error.code === 'permission-denied') {
-                    setMessages([]);
-                    setLoading(false);
-                } else {
-                    console.error('Error in message listener:', error);
-                }
-            });
+        const unsubscribe = onSnapshot(q, (snapshot) => {
+            const newMessages = snapshot.docs.map(doc => ({
+                id: doc.id,
+                ...doc.data(),
+                timestamp: doc.data().timestamp?.toDate() || new Date(),
+                isCurrentUser: doc.data().senderId === auth.currentUser?.uid
+            }));
 
-            // Store the unsubscribe function in ref
-            messagesListenerRef.current = unsubscribe;
+            const hasLocationMessage = newMessages.some(msg => msg.type === 'location');
+            setLocationSharedMap((prev) => ({
+                ...prev,
+                [chatId]: hasLocationMessage,
+            }));
 
-            // Cleanup function
-            return () => {
-                if (messagesListenerRef.current) {
-                    messagesListenerRef.current();
-                }
-                setMessages([]); // Clear messages on unmount
-            };
-        } catch (error) {
-            console.error('Error setting up message listener:', error);
+            setMessages(newMessages);
             setLoading(false);
-        }
-    }, [chatId, currentUser]); // Add currentUser as dependency
-
-    // Update auth effect to handle logout
-    useEffect(() => {
-        let isMounted = true;
-        
-        const handleAuthChange = async (user) => {
-            if (!isMounted) return;
-
-            if (!user) {
-                // Clear state on logout
-                setCurrentUser(null);
-                setMessages([]);
-                setChatId(null);
-                setLoading(false);
-                return;
-            }
-
-            setCurrentUser(user);
-            await initializeChat(user);
-        };
-
-        const unsubscribe = auth.onAuthStateChanged(handleAuthChange);
+        });
 
         return () => {
-            isMounted = false;
             unsubscribe();
-            // Cleanup message listener
-            if (messagesListenerRef.current) {
-                messagesListenerRef.current();
-            }
+            setMessages([]);
         };
-    }, [itemId, reporterId, initialChatId]);
+    }, [chatId]);
 
+    useEffect(() => {
+        const setupNotifications = async () => {
+            await NotificationService.requestPermissions();
+        };
+        setupNotifications();
+    }, []);
+
+    // Update handleSendMessage function
     const handleSendMessage = async () => {
         if (!newMessage.trim() || !currentUser) return;
 
         try {
+            // Get the sender's username from Firestore
+            const senderName = await getUserName(currentUser.uid);
+            
+            const messageData = {
+                text: newMessage.trim(),
+                senderId: currentUser.uid,
+                timestamp: new Date(),
+                senderName: senderName // Use the username from Firestore
+            };
+
             if (!chatId) {
+                // Create new chat
+                const participants = [currentUser.uid, reporterId];
                 const newChatId = await chatService.sendFirstMessage(
-                    [currentUser.uid, reporterId],
+                    participants,
                     itemId,
-                    {
-                        text: newMessage.trim(),
-                        senderId: currentUser.uid
-                    }
+                    messageData
                 );
                 setChatId(newChatId);
+
+                // Send notification only to the other participant
+                if (reporterId !== currentUser.uid) {
+                    await NotificationService.sendPushNotification(
+                        reporterId,
+                        currentUser.uid,
+                        messageData.text,
+                        {
+                            type: 'new_chat',
+                            chatId: newChatId,
+                            itemId,
+                            senderName: messageData.senderName // Add sender name here
+                        }
+                    );
+                }
             } else {
-                await chatService.sendMessage(chatId, {
-                    text: newMessage.trim(),
-                    senderId: currentUser.uid
-                });
+                await chatService.sendMessage(chatId, messageData);
+
+                // Get the other participant's ID
+                const recipientId = getOtherUserId(currentUser.uid, [currentUser.uid, reporterId]);
+
+                // Send push notification to the other participant
+                if (recipientId) {
+                    await NotificationService.sendPushNotification(
+                        recipientId,
+                        currentUser.uid,
+                        messageData.text,
+                        {
+                            type: 'chat_message',
+                            chatId,
+                            itemId,
+                            senderName: messageData.senderName // Add sender name here
+                        }
+                    );
+                }
             }
             setNewMessage('');
         } catch (error) {
@@ -270,18 +223,14 @@ const styles = StyleSheet.create({
         }
     };
 
-    // Update handleShareLocation function
     const handleShareLocation = async () => {
         if (!isReporter) return;
-        
+
         Alert.alert(
             "Share Location",
             "Are you sure you want to share this item's location? This action cannot be undone.",
             [
-                {
-                    text: "Cancel",
-                    style: "cancel"
-                },
+                { text: "Cancel", style: "cancel" },
                 {
                     text: "Share",
                     style: "default",
@@ -295,7 +244,7 @@ const styles = StyleSheet.create({
 
                             const itemData = itemDoc.data();
                             const { latitude, longitude } = itemData.location;
-                            
+
                             await chatService.sendMessage(chatId, {
                                 type: 'location',
                                 text: `📍 Location shared\nLatitude: ${latitude}\nLongitude: ${longitude}`,
@@ -304,6 +253,17 @@ const styles = StyleSheet.create({
                                 coordinates: `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`,
                                 senderId: currentUser.uid
                             });
+
+                            await updateDoc(doc(db, 'chats', chatId), {
+                                locationShared: true,
+                            });
+
+                            setLocationSharedMap((prev) => ({
+                                ...prev,
+                                [chatId]: true,
+                            }));
+
+                            Alert.alert("Success", "Location has been shared successfully.");
                         } catch (error) {
                             console.error('Error sharing location:', error);
                             Alert.alert('Error', 'Failed to share location');
@@ -314,8 +274,12 @@ const styles = StyleSheet.create({
         );
     };
 
-    // Add handler for marking item as found
     const handleMarkAsFound = async () => {
+        if (!currentUser || !isReporter) {
+            Alert.alert('Error', 'You do not have permission to mark this item as found');
+            return;
+        }
+
         Alert.alert(
             "Mark Item as Found",
             "Are you sure this item has been returned to you? This will close the chat and update the item status.",
@@ -329,12 +293,32 @@ const styles = StyleSheet.create({
                     style: "default",
                     onPress: async () => {
                         try {
+                            // First verify ownership
+                            const itemDoc = await getDoc(doc(db, 'lost-items', itemId));
+                            if (!itemDoc.exists()) {
+                                Alert.alert('Error', 'Item not found');
+                                return;
+                            }
+
+                            const itemData = itemDoc.data();
+                            if (itemData.userId !== currentUser.uid) {
+                                Alert.alert('Error', 'You do not have permission to mark this item as found');
+                                return;
+                            }
+
                             // Update item status in Firestore
                             await updateDoc(doc(db, 'lost-items', itemId), {
                                 status: 'found',
                                 foundAt: new Date(),
-                                foundBy: currentUser.uid
+                                foundBy: currentUser.uid,
+                                updatedAt: new Date()
                             });
+                            
+                            // Update chat status in Firestore
+                            await updateDoc(doc(db, 'chats', chatId), {
+                                status: 'closed',
+                                updatedAt: new Date()
+                            }); 
 
                             // Add system message to chat
                             await chatService.sendMessage(chatId, {
@@ -343,7 +327,6 @@ const styles = StyleSheet.create({
                                 senderId: 'system'
                             });
 
-                            setItemFound(true);
                             Alert.alert(
                                 "Success",
                                 "Item has been marked as found. Thank you for using our service!",
@@ -351,7 +334,7 @@ const styles = StyleSheet.create({
                             );
                         } catch (error) {
                             console.error('Error marking item as found:', error);
-                            Alert.alert('Error', 'Failed to update item status');
+                            Alert.alert('Error', 'Failed to update item status. Please ensure you have the correct permissions.');
                         }
                     }
                 }
@@ -359,21 +342,10 @@ const styles = StyleSheet.create({
         );
     };
 
-    // Update renderMessage function to show enhanced location message
     const renderMessage = ({ item }) => {
-        if (item.type === 'system') {
-            return (
-                <View style={styles.systemMessageContainer}>
-                    <Text style={styles.systemMessageText}>{item.text}</Text>
-                </View>
-            );
-        }
         if (item.type === 'location') {
             return (
-                <View style={[
-                    styles.messageContainer,
-                    item.isCurrentUser ? styles.currentUserMessage : styles.otherUserMessage
-                ]}>
+                <View style={[styles.messageContainer, item.isCurrentUser ? styles.currentUserMessage : styles.otherUserMessage]}>
                     <TouchableOpacity 
                         style={styles.locationMessage}
                         onPress={() => {
@@ -389,11 +361,8 @@ const styles = StyleSheet.create({
                             <MaterialCommunityIcons name="map-marker" size={24} color="#fff" />
                             <Text style={styles.locationTitle}>Location Details</Text>
                         </View>
-                        
                         <View style={styles.locationPreview}>
-                            <Text style={styles.locationDetails}>
-                                {item.locationDetails}
-                            </Text>
+                            <Text style={styles.locationDetails}>{item.locationDetails}</Text>
                             <Text style={styles.coordinatesLabel}>Coordinates:</Text>
                             <Text style={styles.coordinatesText}>
                                 Latitude: {item.location.latitude.toFixed(6)}
@@ -404,21 +373,12 @@ const styles = StyleSheet.create({
                             <Text style={styles.tapToOpen}>Tap to open in Maps 🗺️</Text>
                         </View>
                     </TouchableOpacity>
-                    <Text style={styles.messageTime}>
-                        {item.timestamp?.toLocaleTimeString([], { 
-                            hour: '2-digit', 
-                            minute: '2-digit'
-                        })}
-                    </Text>
                 </View>
             );
         }
 
         return (
-            <View style={[
-                styles.messageContainer,
-                item.isCurrentUser ? styles.currentUserMessage : styles.otherUserMessage
-            ]}>
+            <View style={[styles.messageContainer, item.isCurrentUser ? styles.currentUserMessage : styles.otherUserMessage]}>
                 <Text style={styles.messageText}>{item.text}</Text>
                 {item.timestamp && (
                     <Text style={styles.messageTime}>
@@ -432,15 +392,6 @@ const styles = StyleSheet.create({
         );
     };
 
-    // Add helper function to open maps
-    const openMap = (location) => {
-        const url = Platform.select({
-            ios: `maps:${location.latitude},${location.longitude}`,
-            android: `geo:${location.latitude},${location.longitude}?q=${location.latitude},${location.longitude}`
-        });
-        Linking.openURL(url);
-    };
-
     if (loading) {
         return (
             <View style={styles.loadingContainer}>
@@ -452,15 +403,19 @@ const styles = StyleSheet.create({
     return (
         <SafeAreaView style={styles.container}>
             <View style={styles.header}>
-                {!isReporter && locationShared && (
-                    <TouchableOpacity 
-                        style={styles.foundButton}
-                        onPress={handleMarkAsFound}
+                {isReporter && ( // Show the button only if the user is the reporter
+                    <TouchableOpacity
+                        style={[
+                            styles.foundButton,
+                            !locationSharedMap[chatId] && styles.foundButtonDisabled // Apply transparency if location is not shared
+                        ]}
+                        onPress={locationSharedMap[chatId] ? handleMarkAsFound : null} // Disable press if location is not shared
+                        disabled={!locationSharedMap[chatId]} // Disable the button
                     >
-                        <MaterialCommunityIcons 
-                            name="check-circle" 
-                            size={20} 
-                            color="#fff" 
+                        <MaterialCommunityIcons
+                            name="check-circle"
+                            size={20}
+                            color={locationSharedMap[chatId] ? "#fff" : "rgba(255, 255, 255, 0.5)"} // Adjust color based on state
                         />
                         <Text style={styles.foundButtonText}>
                             Mark as Found
@@ -642,14 +597,14 @@ const styles = StyleSheet.create({
         marginBottom: 60, // Add space for input container
     },
     header: {
-        height: 56,
         flexDirection: 'row',
         alignItems: 'center',
-        justifyContent: 'center',
+        justifyContent: 'space-between', // Ensure proper spacing
         padding: 16,
         backgroundColor: '#2D2D2D',
         borderBottomWidth: 1,
         borderBottomColor: '#3D3D3D',
+        minHeight: 60,
     },
     headerInfo: {
         marginLeft: 12,
@@ -657,12 +612,12 @@ const styles = StyleSheet.create({
     },
     headerName: {
         color: '#fff',
-        fontSize: 18,
-        fontWeight: 'bold',
-        flex: 1,
+        fontSize: 16,
+        fontWeight: '600',
         textAlign: 'center',
-        maxWidth: '80%', // Limit text width
-        flexShrink: 1, // Allow text to shrink
+        flex: 1,
+        marginLeft: 60, // Adjust margin to center the username
+        marginRight: 60, // Add equal margin on the right for balance
     },
     headerItemName: {
         color: '#999',
@@ -744,23 +699,22 @@ const styles = StyleSheet.create({
         borderRadius: 12,
     },
     foundButton: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        backgroundColor: '#4CAF50',
+        flexDirection: "row",
+        alignItems: "center",
+        backgroundColor: "#4CAF50",
         paddingHorizontal: 12,
         paddingVertical: 6,
         borderRadius: 20,
-        position: 'absolute',
-        right: 16,
+        position: "absolute",
+        left: 16, // Keep the button on the left
     },
     foundButtonDisabled: {
-        backgroundColor: '#666',
-        opacity: 0.7,
+        backgroundColor: "rgba(76, 175, 80, 0.3)", // Make the button transparent
     },
     foundButtonText: {
-        color: '#fff',
+        color: "#fff",
         fontSize: 14,
-        fontWeight: 'bold',
+        fontWeight: "bold",
         marginLeft: 4,
     }
 });
